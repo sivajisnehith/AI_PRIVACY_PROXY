@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from unittest.mock import patch
 from proxy import proxy as addon
 
 
@@ -41,7 +42,8 @@ class FlowMock:
 
 
 class ChatGPTLiveFlowTests(unittest.TestCase):
-    def test_full_document_upload_and_chat_lifecycle(self):
+    @patch.object(addon, "get_decoy_file", return_value=(None, None))
+    def test_full_document_upload_and_chat_lifecycle(self, _mock_decoy):
         file_id = "file-secret-98765"
         file_name = "Quarterly_Financials_Confidential.pdf"
         sensitive_content = b"%PDF-1.4 CONFIDENTIAL FINANCIAL DATA: Revenue=$50M, Profit=$12M -- DO NOT LEAK"
@@ -138,6 +140,65 @@ class ChatGPTLiveFlowTests(unittest.TestCase):
         # Verify the prompt text is preserved
         self.assertEqual(msg["content"]["content_type"], "text")
         self.assertEqual(msg["content"]["parts"], [user_prompt])
+
+    def test_decoy_substitution_lifecycle(self):
+        file_id = "file-secret-11223"
+        file_name = "My_Sensitive_Notes.pdf"
+        sensitive_content = b"TOP SECRET SOURCE CODE AND ARCHITECTURE DETAILS"
+        user_prompt = "Summarize the attached document."
+
+        # Step 1: Pre-register file metadata
+        step1_body = json.dumps({
+            "file_name": file_name,
+            "file_size": len(sensitive_content),
+            "use_case": "my_files",
+            "mime_type": "application/pdf",
+        }).encode("utf-8")
+        step1_req = RequestMock("chatgpt.com", "/backend-api/files", "POST", step1_body)
+        step1_flow = FlowMock(step1_req)
+        addon.request(step1_flow)
+
+        # Step 2: Binary upload PUT
+        step2_req = RequestMock(
+            "sdmntprcentralindia.oaiusercontent.com",
+            f"/files/{file_id}",
+            "PUT",
+            sensitive_content,
+            content_type="application/pdf",
+        )
+        step2_flow = FlowMock(step2_req)
+        addon.request(step2_flow)
+
+        # In decoy mode, request is forwarded (response is None) with swapped decoy payload
+        self.assertIsNone(step2_flow.response)
+        decoy_p, decoy_b = addon.get_decoy_file()
+        self.assertIsNotNone(decoy_b)
+        self.assertEqual(step2_flow.request.raw_content, decoy_b)
+        self.assertEqual(step2_flow.request.headers["content-length"], str(len(decoy_b)))
+
+        # Verify original was safely preserved on local disk
+        stored_files = list(addon.STORAGE_DIR.glob(f"*{Path(file_name).stem}*"))
+        matching = [f for f in stored_files if f.read_bytes() == sensitive_content]
+        self.assertTrue(len(matching) >= 1, "Original sensitive file was not saved locally")
+
+        # Step 4: Conversation prompt preserves attachment so ChatGPT reads the decoy
+        step4_payload = {
+            "action": "next",
+            "messages": [
+                {
+                    "content": {"content_type": "multimodal_text", "parts": [user_prompt]},
+                    "metadata": {"attachments": [{"id": file_id, "name": file_name}]},
+                }
+            ],
+        }
+        step4_body = json.dumps(step4_payload).encode("utf-8")
+        step4_req = RequestMock("chatgpt.com", "/backend-api/conversation", "POST", step4_body)
+        step4_flow = FlowMock(step4_req)
+        addon.request(step4_flow)
+        # Verify attachment is preserved
+        self.assertIsNone(step4_flow.response)
+        conv_data = json.loads(step4_flow.request.raw_content.decode("utf-8"))
+        self.assertIn("attachments", conv_data["messages"][0]["metadata"])
 
 
 if __name__ == "__main__":

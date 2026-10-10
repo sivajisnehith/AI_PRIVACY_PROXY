@@ -66,6 +66,9 @@ class TestStorage:
 class ProxyRequestTests(unittest.TestCase):
     def setUp(self):
         self.body, self.content_type = make_multipart()
+        self.decoy_patcher = patch.object(addon, "get_decoy_file", return_value=(None, None))
+        self.decoy_patcher.start()
+        self.addCleanup(self.decoy_patcher.stop)
 
     def test_local_upload_saves_exact_file_and_forwards_prompt_without_file(self):
         flow = Flow(Request(body=self.body, content_type=self.content_type))

@@ -21,6 +21,10 @@ TEST_SERVER_URL = "http://127.0.0.1:5000"
 class EndToEndIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from unittest.mock import patch
+        cls.decoy_patcher = patch("proxy.proxy.get_decoy_file", return_value=(None, None))
+        cls.decoy_patcher.start()
+
         # 1. Start test flask server
         cls.flask_thread = threading.Thread(
             target=lambda: app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False),
@@ -34,6 +38,10 @@ class EndToEndIntegrationTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        try:
+            cls.decoy_patcher.stop()
+        except Exception:
+            pass
         try:
             if cls.proxy_master and cls.proxy_loop:
                 cls.proxy_loop.call_soon_threadsafe(cls.proxy_master.shutdown)

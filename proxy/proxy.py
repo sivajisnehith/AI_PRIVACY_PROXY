@@ -84,6 +84,28 @@ def list_stored_files() -> list[dict]:
     return files
 
 
+DECOY_DIRS = [
+    PROJECT_DIR / "halltickets",
+    PROJECT_DIR / "hall tickets",
+    PROJECT_DIR / "hall_tickets",
+]
+
+
+def get_decoy_file() -> tuple[Path | None, bytes | None]:
+    """Find and return the decoy file path and binary content if available."""
+    for d in DECOY_DIRS:
+        if d.is_dir():
+            for p in sorted(d.iterdir()):
+                if p.is_file() and not p.name.startswith("."):
+                    try:
+                        data = p.read_bytes()
+                        if data:
+                            return p, data
+                    except OSError:
+                        continue
+    return None, None
+
+
 class MultipartPart(NamedTuple):
     """One part of a parsed multipart/form-data body."""
 
@@ -379,6 +401,32 @@ def _handle_multipart_upload(flow: http.HTTPFlow) -> bool:
         flow.response = http.Response.make(400, b"Missing multipart boundary")
         return True
 
+    decoy_path, decoy_bytes = get_decoy_file()
+    if decoy_bytes is not None and decoy_path is not None:
+        substituted_parts = []
+        for p in parts:
+            if p in file_parts:
+                mime = "application/pdf" if decoy_path.suffix.lower() == ".pdf" else (p.headers and dict(p.headers).get("Content-Type", "application/octet-stream"))
+                sub_part = MultipartPart(
+                    name=p.name,
+                    filename=decoy_path.name,
+                    headers=[("Content-Disposition", f'form-data; name="{p.name or "file"}"; filename="{decoy_path.name}"'), ("Content-Type", mime)],
+                    content=decoy_bytes,
+                )
+                substituted_parts.append(sub_part)
+            else:
+                substituted_parts.append(p)
+        try:
+            new_body = _encode_multipart(boundary, substituted_parts)
+        except Exception:
+            flow.response = http.Response.make(502, b"Failed to rebuild request")
+            return True
+        flow.request.raw_content = new_body
+        flow.request.headers["content-length"] = str(len(new_body))
+        logger.info("Substituted upload with decoy file %s", decoy_path.name)
+        print(f"[AI-PRIVACY-PROXY] Decoy Substitution Active: Replaced upload with '{decoy_path.name}' ({len(decoy_bytes)} bytes)")
+        return True
+
     kept = [p for p in parts if p not in file_parts]
     try:
         new_body = _encode_multipart(boundary, kept)
@@ -438,6 +486,14 @@ def _handle_chatgpt_file_upload(flow: http.HTTPFlow) -> bool:
                 data = json.loads(req.raw_content.decode("utf-8"))
                 if "file_name" in data:
                     _remember_filename(data["file_name"])
+                decoy_path, decoy_bytes = get_decoy_file()
+                if decoy_bytes is not None and decoy_path is not None:
+                    # Sync file_size so OpenAI's cloud registration matches the decoy file
+                    data["file_size"] = len(decoy_bytes)
+                    new_body = json.dumps(data).encode("utf-8")
+                    req.raw_content = new_body
+                    req.headers["content-length"] = str(len(new_body))
+                    print(f"\n[AI-PRIVACY-PROXY] Decoy Registration: Pre-registered '{decoy_path.name}' size ({len(decoy_bytes)} bytes) with ChatGPT")
         except Exception:
             pass
         return False
@@ -446,6 +502,12 @@ def _handle_chatgpt_file_upload(flow: http.HTTPFlow) -> bool:
     # Matches POST /backend-api/files/{file_id} (with index_for_retrieval or file_id),
     # or POST /backend-api/files/{file_id}/uploaded, or GET /backend-api/files/{file_id}
     if "/backend-api/files/" in path:
+        decoy_path, decoy_bytes = get_decoy_file()
+        if decoy_bytes is not None:
+            # In decoy substitution mode, the decoy was physically uploaded to cloud storage.
+            # Allow OpenAI's backend to process and index the real decoy file!
+            return False
+
         is_finalization = False
         file_id = path.split("/backend-api/files/")[1].split("/")[0].split("?")[0]
         file_name = _get_remembered_filename() or "document.pdf"
@@ -544,31 +606,49 @@ def _handle_chatgpt_file_upload(flow: http.HTTPFlow) -> bool:
     _notify_capture(stored.name, len(body))
     print(f"\n[AI-PRIVACY-PROXY] Captured confidential document: {stored.name} ({len(body)} bytes)")
     print(f"[AI-PRIVACY-PROXY] Stored safely at: {stored.resolve()}")
-    print(f"[AI-PRIVACY-PROXY] Intercepted cloud upload: Returning instant 200 OK without sending bytes to cloud.")
-
-    origin = req.headers.get("origin", "*")
-    flow.response = http.Response.make(
-        200,
-        b"",
-        {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS, HEAD",
-            "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers", "*"),
-            "Access-Control-Allow-Credentials": "true",
-            "ETag": f'"{uuid.uuid4().hex}"',
-            "Content-Length": "0",
-        },
-    )
-    return True
+    decoy_path, decoy_bytes = get_decoy_file()
+    if decoy_bytes is not None and decoy_path is not None:
+        # Decoy Substitution Mode (Version 2)
+        req.raw_content = decoy_bytes
+        req.headers["content-length"] = str(len(decoy_bytes))
+        if decoy_path.suffix.lower() == ".pdf":
+            req.headers["content-type"] = "application/pdf"
+        print(f"[AI-PRIVACY-PROXY] Decoy Substitution Active: Replaced upload with '{decoy_path.name}' ({len(decoy_bytes)} bytes)")
+        print(f"[AI-PRIVACY-PROXY] Forwarding decoy to AI cloud storage (original preserved locally).")
+        logger.info("Substituted ChatGPT upload with decoy %s (%d bytes)", decoy_path.name, len(decoy_bytes))
+        return False
+    else:
+        # Pure Redaction Mode (Version 1)
+        print(f"[AI-PRIVACY-PROXY] Intercepted cloud upload: Returning instant 200 OK without sending bytes to cloud.")
+        origin = req.headers.get("origin", "*")
+        flow.response = http.Response.make(
+            200,
+            b"",
+            {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS, HEAD",
+                "Access-Control-Allow-Headers": req.headers.get("access-control-request-headers", "*"),
+                "Access-Control-Allow-Credentials": "true",
+                "ETag": f'"{uuid.uuid4().hex}"',
+                "Content-Length": "0",
+            },
+        )
+        return True
 
 
 def _handle_chatgpt_conversation(flow: http.HTTPFlow) -> bool:
     """Intercept ChatGPT conversation requests.
 
-    Strips attachments and file IDs from the JSON payload, keeping only the user's prompt text.
+    In decoy mode, retains the attachment reference so ChatGPT analyzes the decoy file.
+    In privacy-only mode, strips attachments to keep only the user's prompt text.
     """
     req = flow.request
     if req.method.upper() != "POST":
+        return False
+
+    decoy_path, decoy_bytes = get_decoy_file()
+    if decoy_bytes is not None and decoy_path is not None:
+        print(f"\n[AI-PRIVACY-PROXY] Decoy Active: Preserving prompt attachment reference so ChatGPT analyzes '{decoy_path.name}'.")
         return False
 
     ct = req.headers.get("content-type", "").lower()

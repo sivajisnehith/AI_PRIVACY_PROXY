@@ -34,5 +34,13 @@ tmp*/
 .idea/
 *.swp
 *.swo
+# Decoy folders (never commit hall tickets)
+halltickets/
+halltickets/*
+hall_tickets/
+hall_tickets/*
+hall tickets/
+hall tickets/*
+
 Thumbs.db
 Desktop.ini

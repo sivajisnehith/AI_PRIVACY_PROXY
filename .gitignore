@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Logs and runtime data
+logs/*
+!logs/.gitkeep
+storage/*
+!storage/.gitkeep
+*.log
+
+# Sensitive certificates and keys
+*.pem
+*.cer
+*.key
+*.crt
+
+# Browser profiles and temp dirs
+firefox-test-profile/
+tmp*/
+.temp/
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,20 @@
+AI PRIVACY PROXY - SECURITY & PERMISSION AGREEMENT
+
+Please review the permissions and disclosures required by AI Privacy Proxy before proceeding with installation.
+
+1. PURPOSE & OPERATION
+AI Privacy Proxy functions as a local, on-device Data Loss Prevention (DLP) safeguard. It intercepts outgoing document and file uploads to cloud AI platforms (such as ChatGPT) to prevent unintended leakage of confidential data, intellectual property, and Personally Identifiable Information (PII).
+
+2. NETWORK PROXY CONFIGURATION
+During active execution, the application configures your Windows Internet Settings (WinINet) to route web traffic through a local proxy at 127.0.0.1:8080. When the application is paused or exited, Windows Internet Settings are automatically restored to their original state (direct connection).
+
+3. LOCAL ROOT CERTIFICATE AUTHORITY
+To inspect and sanitize encrypted HTTPS requests to AI endpoints, the application installs a local Root Certificate Authority (CA) on this device. This certificate is stored strictly on your local machine and is used solely for local DLP inspection.
+
+4. ON-DEVICE DOCUMENT VAULT
+Original document files intercepted by AI Privacy Proxy are saved exclusively to your local disk in your user Storage vault. The cloud AI provider receives only your text prompts. Zero data or telemetry is transmitted to external servers.
+
+5. BACKGROUND EXECUTION
+The application runs silently in the Windows System Tray without displaying a command prompt. You can open your document vault, pause protection, or exit at any time by right-clicking the shield icon in your taskbar.
+
+By clicking "I accept the agreement", you authorize AI Privacy Proxy to configure local proxy settings, install the local security certificate, and protect your outgoing AI traffic.
